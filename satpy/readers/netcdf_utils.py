@@ -95,6 +95,7 @@ class NetCDF4FileHandler(BaseFileHandler):
         """Initialize object."""
         super(NetCDF4FileHandler, self).__init__(
             filename, filename_info, filetype_info)
+        self._use_h5netcdf = False
         self.file_content = {}
         self.cached_file_content = {}
         try:
@@ -359,18 +360,28 @@ class NetCDF4FsspecFileHandler(NetCDF4FileHandler):
     """NetCDF4 file handler using fsspec to read files remotely."""
 
     def _get_file_handle(self):
-        import h5netcdf
-        f_obj = open_file_or_filename(self.filename)
-        return h5netcdf.File(f_obj, 'r')
+        try:
+            return super()._get_file_handle()
+        except FileNotFoundError:
+            import h5netcdf
+            f_obj = open_file_or_filename(self.filename)
+            self._use_h5netcdf = False
+            return h5netcdf.File(f_obj, 'r')
 
     def _check_variable_type(self, var, cache_var_size):
-        from h5netcdf import Variable
-        return (isinstance(var, Variable)
-                and isinstance(var.dtype, np.dtype)  # vlen may be str
-                and np.prod(var.shape) * var.dtype.itemsize < cache_var_size)
+        if self._use_h5netcdf:
+            from h5netcdf import Variable
+            return (isinstance(var, Variable)
+                    and isinstance(var.dtype, np.dtype)  # vlen may be str
+                    and np.prod(var.shape) * var.dtype.itemsize < cache_var_size)
+        return super().check_variable_type(var, cache_var_size)
 
     def _get_object_attrs(self, obj):
-        return obj.attrs
+        if self._use_h5netcdf:
+            return obj.attrs
+        return super()._get_object_attrs()
 
     def _get_attr(self, obj, key):
-        return obj.attrs[key]
+        if self._use_h5netcdf:
+            return obj.attrs[key]
+        return super()._get_attr
