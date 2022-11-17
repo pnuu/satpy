@@ -104,6 +104,7 @@ class NetCDF4FileHandler(BaseFileHandler):
             LOG.exception(
                 'Failed reading file %s. Possibly corrupted file', self.filename)
             raise
+
         self.auto_maskandscale = auto_maskandscale
         if hasattr(file_handle, "set_auto_maskandscale"):
             file_handle.set_auto_maskandscale(auto_maskandscale)
@@ -368,7 +369,7 @@ class NetCDF4FsspecFileHandler(NetCDF4FileHandler):
         except FileNotFoundError:
             import h5netcdf
             f_obj = open_file_or_filename(self.filename)
-            self._use_h5netcdf = False
+            self._use_h5netcdf = True
             return h5netcdf.File(f_obj, 'r')
 
     def _check_variable_type(self, var, cache_var_size):
