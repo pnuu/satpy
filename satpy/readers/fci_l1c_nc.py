@@ -250,12 +250,7 @@ class FCIL1cNCFileHandler(NetCDF4FsspecFileHandler):
         # Get the dataset
         # Get metadata for given dataset
         measured = self.get_channel_measured_group_path(key['name'])
-        data = self[measured + "/effective_radiance"]
-
-        attrs = dict(data.attrs.items()).copy()
-        info = info.copy()
-        data = xr.DataArray(
-            da.from_array(data), dims=data.dimensions, attrs=attrs, name=data.name)
+        data, attrs = _get_data_and_attrs(self[measured + "/effective_radiance"])
 
         fv = attrs.pop(
             "FillValue",
@@ -345,20 +340,14 @@ class FCIL1cNCFileHandler(NetCDF4FsspecFileHandler):
         """Load a quality field for an FCI channel."""
         grp_path = self.get_channel_measured_group_path(_get_channel_name_from_dsname(dsname))
         dv_path = grp_path + "/pixel_quality"
-        data = self[dv_path]
-        attrs = dict(data.attrs.items()).copy()
-        data = xr.DataArray(
-            da.from_array(data), dims=data.dimensions, attrs=attrs, name=data.name)
+        data, _ = _get_data_and_attrs(self[dv_path])
         return data
 
     def _get_dataset_index_map(self, dsname):
         """Load the index map for an FCI channel."""
         grp_path = self.get_channel_measured_group_path(_get_channel_name_from_dsname(dsname))
         dv_path = grp_path + "/index_map"
-        data = self[dv_path]
-        attrs = dict(data.attrs.items()).copy()
-        data = xr.DataArray(
-            da.from_array(data), dims=data.dimensions, attrs=attrs, name=data.name)
+        data, attrs = _get_data_and_attrs(self[dv_path])
         data = data.where(data != data.attrs.get('_FillValue', 65535))
         return data
 
@@ -623,3 +612,12 @@ class FCIL1cNCFileHandler(NetCDF4FsspecFileHandler):
 
 def _get_array_item(itm):
     return itm.__array__().item()
+
+
+def _get_data_and_attrs(data):
+    attrs = data.attrs
+    if not isinstance(data, xr.DataArray):
+        attrs = dict(attrs.items()).copy()
+        data = xr.DataArray(
+            da.from_array(data), dims=data.dimensions, attrs=attrs, name=data.name)
+    return data, attrs

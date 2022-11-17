@@ -213,6 +213,9 @@ class NetCDF4FileHandler(BaseFileHandler):
             self.file_content[fc_key] = global_attrs[key] = value
         self.file_content["/attrs"] = global_attrs
 
+    def _get_object_attrs(self, obj):
+        return obj.ncattrs()
+
     def _collect_attrs(self, name, obj):
         """Collect all the attributes for the provided file object."""
         for key in self._get_object_attrs(obj):
@@ -379,9 +382,9 @@ class NetCDF4FsspecFileHandler(NetCDF4FileHandler):
     def _get_object_attrs(self, obj):
         if self._use_h5netcdf:
             return obj.attrs
-        return super()._get_object_attrs()
+        return super()._get_object_attrs(obj)
 
     def _get_attr(self, obj, key):
         if self._use_h5netcdf:
             return obj.attrs[key]
-        return super()._get_attr
+        return super()._get_attr(obj, key)
