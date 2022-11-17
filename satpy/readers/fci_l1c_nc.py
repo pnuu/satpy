@@ -107,6 +107,7 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 import logging
 from functools import cached_property
 
+import dask.array as da
 import numpy as np
 import xarray as xr
 from netCDF4 import default_fillvals
@@ -115,7 +116,7 @@ from pyresample import geometry
 from satpy.readers._geos_area import get_geos_area_naming
 from satpy.readers.eum_base import get_service_mode
 
-from .netcdf_utils import NetCDF4FileHandler
+from .netcdf_utils import NetCDF4FsspecFileHandler
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +158,7 @@ def _get_channel_name_from_dsname(dsname):
     return channel_name
 
 
-class FCIL1cNCFileHandler(NetCDF4FileHandler):
+class FCIL1cNCFileHandler(NetCDF4FsspecFileHandler):
     """Class implementing the MTG FCI L1c Filehandler.
 
     This class implements the Meteosat Third Generation (MTG) Flexible
@@ -251,8 +252,10 @@ class FCIL1cNCFileHandler(NetCDF4FileHandler):
         measured = self.get_channel_measured_group_path(key['name'])
         data = self[measured + "/effective_radiance"]
 
-        attrs = data.attrs.copy()
+        attrs = dict(data.attrs.items()).copy()
         info = info.copy()
+        data = xr.DataArray(
+            da.from_array(data), dims=data.dimensions, attrs=attrs, name=data.name)
 
         fv = attrs.pop(
             "FillValue",
@@ -343,6 +346,9 @@ class FCIL1cNCFileHandler(NetCDF4FileHandler):
         grp_path = self.get_channel_measured_group_path(_get_channel_name_from_dsname(dsname))
         dv_path = grp_path + "/pixel_quality"
         data = self[dv_path]
+        attrs = dict(data.attrs.items()).copy()
+        data = xr.DataArray(
+            da.from_array(data), dims=data.dimensions, attrs=attrs, name=data.name)
         return data
 
     def _get_dataset_index_map(self, dsname):
@@ -350,14 +356,15 @@ class FCIL1cNCFileHandler(NetCDF4FileHandler):
         grp_path = self.get_channel_measured_group_path(_get_channel_name_from_dsname(dsname))
         dv_path = grp_path + "/index_map"
         data = self[dv_path]
-
+        attrs = dict(data.attrs.items()).copy()
+        data = xr.DataArray(
+            da.from_array(data), dims=data.dimensions, attrs=attrs, name=data.name)
         data = data.where(data != data.attrs.get('_FillValue', 65535))
         return data
 
     def _get_aux_data_lut_vector(self, aux_data_name):
         """Load the lut vector of an auxiliary variable."""
         lut = self.get_and_cache_npxr(AUX_DATA[aux_data_name])
-
         fv = default_fillvals.get(lut.dtype.str[1:], np.nan)
         lut = lut.where(lut != fv)
 
@@ -415,16 +422,16 @@ class FCIL1cNCFileHandler(NetCDF4FileHandler):
             coord_radian = self["data/{:s}/measured/{:s}".format(channel_name, coord)]
 
             # TODO remove this check when old versions of IDPF test data (<v4) are deprecated.
-            if coord == "x" and coord_radian.scale_factor > 0:
+            if coord == "x" and coord_radian.attrs["scale_factor"] > 0:
                 coord_radian.attrs['scale_factor'] *= -1
 
             # TODO remove this check when old versions of IDPF test data (<v5) are deprecated.
-            if type(coord_radian.scale_factor) is np.float32:
+            if type(coord_radian.attrs["scale_factor"]) is np.float32:
                 coord_radian.attrs['scale_factor'] = coord_radian.attrs['scale_factor'].astype('float64')
-            if type(coord_radian.add_offset) is np.float32:
+            if type(coord_radian.attrs['add_offset']) is np.float32:
                 coord_radian.attrs['add_offset'] = coord_radian.attrs['add_offset'].astype('float64')
 
-            coord_radian_num = coord_radian[:] * coord_radian.scale_factor + coord_radian.add_offset
+            coord_radian_num = coord_radian[:] * coord_radian.attrs["scale_factor"] + coord_radian.attrs["add_offset"]
 
             # FCI defines pixels by centroids (see PUG), while pyresample
             # defines corners as lower left corner of lower left pixel, upper right corner of upper right pixel
@@ -438,9 +445,9 @@ class FCIL1cNCFileHandler(NetCDF4FileHandler):
             # The values of y go from negative (South) to positive (North) and the scale factor of y is positive.
 
             # South-West corner (x positive, y negative)
-            first_coord_radian = coord_radian_num[0] - coord_radian.scale_factor / 2
+            first_coord_radian = coord_radian_num[0] - coord_radian.attrs["scale_factor"] / 2
             # North-East corner (x negative, y positive)
-            last_coord_radian = coord_radian_num[-1] + coord_radian.scale_factor / 2
+            last_coord_radian = coord_radian_num[-1] + coord_radian.attrs["scale_factor"] / 2
 
             # convert to arc length in m
             first_coord = first_coord_radian * h  # arc length in m
@@ -612,3 +619,7 @@ class FCIL1cNCFileHandler(NetCDF4FileHandler):
 
         res = 100 * radiance * np.pi * sun_earth_distance ** 2 / cesi
         return res
+
+
+def _get_array_item(itm):
+    return itm.__array__().item()
