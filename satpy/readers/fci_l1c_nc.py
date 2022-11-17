@@ -610,10 +610,6 @@ class FCIL1cNCFileHandler(NetCDF4FsspecFileHandler):
         return res
 
 
-def _get_array_item(itm):
-    return itm.__array__().item()
-
-
 def _get_data_and_attrs(data):
     attrs = data.attrs
     if not isinstance(data, xr.DataArray):
