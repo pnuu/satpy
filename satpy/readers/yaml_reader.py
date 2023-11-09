@@ -493,7 +493,6 @@ class FileYAMLReader(AbstractYAMLReader, DataDownloadMixin):
         """Generate new filehandler instances."""
         requirements = filetype_info.get("requires")
         filetype_cls = filetype_info["file_reader"]
-
         if fh_kwargs is None:
             fh_kwargs = {}
 

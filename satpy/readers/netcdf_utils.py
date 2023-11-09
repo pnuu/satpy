@@ -32,6 +32,8 @@ from satpy.utils import get_legacy_chunk_size
 LOG = logging.getLogger(__name__)
 CHUNK_SIZE = get_legacy_chunk_size()
 
+_shareable_file_content = {}
+
 
 class NetCDF4FileHandler(BaseFileHandler):
     """Small class for inspecting a NetCDF4 file and retrieving its metadata/header data.
@@ -97,7 +99,12 @@ class NetCDF4FileHandler(BaseFileHandler):
         super(NetCDF4FileHandler, self).__init__(
             filename, filename_info, filetype_info)
         self.file_content = {}
+        self.filename = filename
         self.cached_file_content = {}
+        file_type = filetype_info["file_type"]
+        if file_type not in _shareable_file_content:
+            _shareable_file_content[file_type] = {}
+        self.shareable_file_content = _shareable_file_content[file_type]
         self._use_h5netcdf = False
         try:
             file_handle = self._get_file_handle()
@@ -161,28 +168,49 @@ class NetCDF4FileHandler(BaseFileHandler):
             var_name = base_name + var_name
             self._collect_variable_info(var_name, var_obj)
 
-    def _collect_variable_info(self, var_name, var_obj):
-        self.file_content[var_name] = var_obj
-        self.file_content[var_name + "/dtype"] = var_obj.dtype
-        self.file_content[var_name + "/shape"] = var_obj.shape
-        self.file_content[var_name + "/dimensions"] = var_obj.dimensions
-        self._collect_attrs(var_name, var_obj)
+    def _collect_variable_info(self, var_name, var_obj, shareable):
+        if var_name in self.shareable_file_content:
+            self.file_content[var_name] = self.shareable_file_content[var_name]
+            self.file_content[var_name + "/dtype"] = self.shareable_file_content[var_name + "/dtype"]
+            self.file_content[var_name + "/shape"] = self.shareable_file_content[var_name + "/shape"]
+            self.file_content[var_name + "/dimensions"] = self.shareable_file_content[var_name + "/dimensions"]
+        else:
+            self.file_content[var_name] = var_obj
+            self.file_content[var_name + "/dtype"] = var_obj.dtype
+            self.file_content[var_name + "/shape"] = var_obj.shape
+            self.file_content[var_name + "/dimensions"] = var_obj.dimensions
+            if var_name in shareable:
+                self.shareable_file_content[var_name] = self.file_content[var_name]
+                self.shareable_file_content[var_name + "/dtype"] = self.file_content[var_name + "/dtype"]
+                self.shareable_file_content[var_name + "/shape"] = self.file_content[var_name + "/shape"]
+                self.shareable_file_content[var_name + "/dimensions"] = self.file_content[var_name + "/dimensions"]
+        self._collect_attrs(var_name, var_obj, shareable)
 
     def _collect_listed_variables(self, file_handle, listed_variables):
         variable_name_replacements = self.filetype_info.get("variable_name_replacements")
-        for itm in self._get_required_variable_names(listed_variables, variable_name_replacements):
+        collect_variables = listed_variables.copy()
+        shareable = []
+        if isinstance(collect_variables[0], list):
+            shareable = collect_variables.pop(0)
+        if shareable:
+            collect_variables = collect_variables + shareable
+            shareable = self._get_required_variable_names(shareable, variable_name_replacements)
+        required_variable_names = self._get_required_variable_names(collect_variables, variable_name_replacements)
+        for itm in required_variable_names:
             parts = itm.split("/")
             grp = file_handle
             for p in parts[:-1]:
                 if p == "attr":
                     n = "/".join(parts)
                     self.file_content[n] = self._get_attr_value(grp, parts[-1])
+                    if n in shareable:
+                        self.shareable_file_content[n] = self.file_content[n]
                     break
                 grp = grp[p]
             if p != "attr":
                 var_obj = grp[parts[-1]]
-                self._collect_variable_info(itm, var_obj)
-                self.collect_dimensions(itm, grp)
+                self._collect_variable_info(itm, var_obj, shareable)
+                self.collect_dimensions(itm, grp, shareable)
 
     @staticmethod
     def _get_required_variable_names(listed_variables, variable_name_replacements):
@@ -214,12 +242,22 @@ class NetCDF4FileHandler(BaseFileHandler):
     def _get_object_attrs(self, obj):
         return obj.__dict__
 
-    def _collect_attrs(self, name, obj):
+    def _collect_attrs(self, name, obj, shareable):
         """Collect all the attributes for the provided file object."""
-        for key in self._get_object_attrs(obj):
-            fc_key = f"{name}/attr/{key}"
-            value = self._get_attr_value(obj, key)
-            self.file_content[fc_key] = value
+        from_cache = False
+        for key in self.shareable_file_content:
+            if key.startswith(f"{name}/attr/"):
+                self.file_content[key] = self.shareable_file_content[key]
+                from_cache = True
+
+        if not from_cache:
+            add_to_cache = any(itm.startswith(f"{name}") for itm in shareable)
+            for key in self._get_object_attrs(obj):
+                fc_key = f"{name}/attr/{key}"
+                value = self._get_attr_value(obj, key)
+                self.file_content[fc_key] = value
+                if add_to_cache:
+                    self.shareable_file_content[fc_key] = self.file_content[fc_key]
 
     def _get_attr_value(self, obj, key):
         value = self._get_attr(obj, key)
@@ -232,11 +270,20 @@ class NetCDF4FileHandler(BaseFileHandler):
     def _get_attr(self, obj, key):
         return getattr(obj, key)
 
-    def collect_dimensions(self, name, obj):
+    def collect_dimensions(self, name, obj, shareable):
         """Collect dimensions."""
-        for dim_name, dim_obj in obj.dimensions.items():
-            dim_name = "{}/dimension/{}".format(name, dim_name)
-            self.file_content[dim_name] = len(dim_obj)
+        from_cache = False
+        for key in self.shareable_file_content:
+            if key.startswith(f"{name}/dimension/"):
+                self.file_content[key] = self.shareable_file_content[key]
+                from_cache = True
+
+        if not from_cache:
+            for dim_name, dim_obj in obj.dimensions.items():
+                dim_name = f"{name}/dimension/{dim_name}"
+                self.file_content[dim_name] = len(dim_obj)
+                if dim_name in shareable:
+                    self.shareable_file_content[dim_name] = self.file_content[dim_name]
 
     def collect_cache_vars(self, cache_var_size):
         """Collect data variables for caching.
