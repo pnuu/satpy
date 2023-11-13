@@ -28,6 +28,7 @@ from contextlib import suppress
 from fnmatch import fnmatch
 from weakref import WeakValueDictionary
 
+import dask
 import numpy as np
 import xarray as xr
 import yaml
@@ -510,7 +511,7 @@ class FileYAMLReader(AbstractYAMLReader, DataDownloadMixin):
                 warnings.warn(str(err) + " for {}".format(filename), stacklevel=4)
                 continue
 
-            yield filetype_cls(filename, filename_info, filetype_info, *req_fh, **fh_kwargs)
+            yield dask.delayed(filetype_cls)(filename, filename_info, filetype_info, *req_fh, **fh_kwargs)
 
     def time_matches(self, fstart, fend):
         """Check that a file's start and end time mtach filter_parameters of this reader."""
@@ -600,7 +601,7 @@ class FileYAMLReader(AbstractYAMLReader, DataDownloadMixin):
         filehandler_iter = self._new_filehandler_instances(filetype_info,
                                                            filename_iter,
                                                            fh_kwargs=fh_kwargs)
-        filtered_iter = self.filter_fh_by_metadata(filehandler_iter)
+        filtered_iter = self.filter_fh_by_metadata(*dask.compute(filehandler_iter))
         return list(filtered_iter)
 
     def create_filehandlers(self, filenames, fh_kwargs=None):
@@ -692,17 +693,17 @@ class FileYAMLReader(AbstractYAMLReader, DataDownloadMixin):
     @staticmethod
     def _load_dataset(dsid, ds_info, file_handlers, dim="y", **kwargs):
         """Load only a piece of the dataset."""
+        slices = []
         slice_list = []
         failure = True
         for fh in file_handlers:
-            try:
-                projectable = fh.get_dataset(dsid, ds_info)
-                if projectable is not None:
-                    slice_list.append(projectable)
-                    failure = False
-            except KeyError:
-                logger.warning("Failed to load {} from {}".format(dsid, fh),
-                               exc_info=True)
+            slices.append(dask.delayed(_get_projectable)(fh, dsid, ds_info))
+        slices = dask.compute(slices)
+        for proj, success in slices:
+            if not success:
+                failure = True
+            else:
+                slice_list.append(proj)
 
         if failure:
             raise KeyError(
@@ -968,6 +969,17 @@ class FileYAMLReader(AbstractYAMLReader, DataDownloadMixin):
             cids.append(self.get_dataset_key(cid))
 
         return cids
+
+
+def _get_projectable(fh, dsid, ds_info):
+    try:
+        projectable = fh.get_dataset(dsid, ds_info)
+        if projectable is not None:
+            return projectable, True
+    except KeyError:
+        logger.warning("Failed to load {} from {}".format(dsid, fh),
+                        exc_info=True)
+    return None, False
 
 
 def _load_area_def(dsid, file_handlers):
